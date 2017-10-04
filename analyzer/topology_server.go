@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,7 @@ import (
 	"github.com/skydive-project/skydive/logging"
 	"github.com/skydive-project/skydive/statics"
 	"github.com/skydive-project/skydive/topology/graph"
+	"github.com/skydive-project/skydive/topology/graph/traversal"
 	"github.com/xeipuuv/gojsonschema"
 )
 
@@ -55,21 +57,29 @@ type TopologyReplicatorPeer struct {
 	host        string
 }
 
+type topologySubscriber struct {
+	graph         *graph.Graph
+	gremlinFilter string
+	ts            *traversal.GremlinTraversalSequence
+}
+
 // TopologyServer serves the local Graph and send local modification to its peers.
 // Only modification of the local Graph made either by the local server,
 // by an agent message or by an external client will be forwarded to the peers.
 type TopologyServer struct {
 	sync.RWMutex
 	shttp.DefaultWSSpeakerEventHandler
-	pool         shttp.WSJSONSpeakerPool
-	Graph        *graph.Graph
-	cached       *graph.CachedBackend
-	nodeSchema   gojsonschema.JSONLoader
-	edgeSchema   gojsonschema.JSONLoader
-	authors      map[string]bool // authors of graph modification meaning not forwarding them.
-	peers        []*TopologyReplicatorPeer
-	wg           sync.WaitGroup
-	replicateMsg atomic.Value
+	pool          shttp.WSJSONSpeakerPool
+	Graph         *graph.Graph
+	cached        *graph.CachedBackend
+	nodeSchema    gojsonschema.JSONLoader
+	edgeSchema    gojsonschema.JSONLoader
+	authors       map[string]bool // authors of graph modification meaning not forwarding them.
+	peers         []*TopologyReplicatorPeer
+	wg            sync.WaitGroup
+	replicateMsg  atomic.Value
+	gremlinParser *traversal.GremlinTraversalParser
+	subscribers   map[string]*topologySubscriber
 }
 
 // getHostID loop until being able to get the host-id of the peer.
@@ -142,6 +152,20 @@ func (p *TopologyReplicatorPeer) disconnect() {
 	}
 }
 
+func (t *TopologyServer) getGraph(gremlinQuery string, ts *traversal.GremlinTraversalSequence) (*graph.Graph, error) {
+	res, err := ts.Exec()
+	if err != nil {
+		return nil, err
+	}
+
+	tv, ok := res.(*traversal.GraphTraversal)
+	if !ok {
+		return nil, fmt.Errorf("Gremlin query '%s' did not return a graph", gremlinQuery)
+	}
+
+	return tv.Graph, nil
+}
+
 func (t *TopologyServer) addPeer(addr string, port int, auth *shttp.AuthenticationOpts, g *graph.Graph) {
 	peer := &TopologyReplicatorPeer{
 		Addr:        addr,
@@ -176,6 +200,11 @@ func (t *TopologyServer) hostGraphDeleted(host string, mode int) {
 	t.Graph.DelHostGraph(host)
 }
 
+// OnConnected called when a WSSpeaker got connected. The WSSPeaker can be
+// either a peer, an agent or an external client.
+func (t *TopologyServer) OnConnected(c shttp.WSSpeaker) {
+}
+
 // OnDisconnected called when a WSSpeaker got disconnected. The WSSPeaker can be
 // either a peer, an agent or an external client.
 func (t *TopologyServer) OnDisconnected(c shttp.WSSpeaker) {
@@ -199,6 +228,7 @@ func (t *TopologyServer) OnDisconnected(c shttp.WSSpeaker) {
 
 	t.Lock()
 	delete(t.authors, host)
+	delete(t.subscribers, host)
 	t.Unlock()
 }
 
@@ -214,13 +244,41 @@ func (t *TopologyServer) OnWSJSONMessage(c shttp.WSSpeaker, msg *shttp.WSJSONMes
 	// this kind of message usually comes from external clients like the WebUI
 	if msgType == graph.SyncRequestMsgType {
 		t.Graph.RLock()
-		context, status := obj.(graph.GraphContext), http.StatusOK
-		g, err := t.Graph.WithContext(context)
+		context, status := obj.(graph.SyncRequestMsg), http.StatusOK
+		g, err := t.Graph.WithContext(context.GraphContext)
+		var result interface{} = g
 		if err != nil {
 			logging.GetLogger().Errorf("analyzer is unable to get a graph with context %+v: %s", context, err.Error())
-			g, status = nil, http.StatusBadRequest
+			result, status = nil, http.StatusBadRequest
 		}
-		reply := msg.Reply(g, graph.SyncReplyMsgType, status)
+
+		if context.GremlinFilter != "" {
+			ts, err := t.gremlinParser.Parse(strings.NewReader(context.GremlinFilter), false)
+			if err != nil {
+				logging.GetLogger().Infof("Invalid Gremlin filter '%s' for client %s", context.GremlinFilter, c.GetHost())
+				return
+			}
+			logging.GetLogger().Infof("Client %s subscribed with filter %s", c.GetHost(), context.GremlinFilter)
+
+			g, err := t.getGraph(context.GremlinFilter, ts)
+			if err != nil {
+				logging.GetLogger().Error(err)
+				return
+			}
+
+			t.subscribers[c.GetHost()] = &topologySubscriber{graph: g, ts: ts, gremlinFilter: context.GremlinFilter}
+		}
+
+		if subscriber, found := t.subscribers[c.GetHost()]; found {
+			gts, err := subscriber.ts.Exec()
+			if err != nil {
+				logging.GetLogger().Errorf("Graph: unable to get a graph with filter %s: %s", subscriber.gremlinFilter, err.Error())
+				result, status = nil, http.StatusBadRequest
+			}
+			result = gts.Values()[0]
+		}
+
+		reply := msg.Reply(result, graph.SyncReplyMsgType, status)
 		c.SendMessage(reply)
 		t.Graph.RUnlock()
 
@@ -322,7 +380,35 @@ func (t *TopologyServer) notifyClients(msg *shttp.WSJSONMessage) {
 	for _, c := range t.pool.GetSpeakers() {
 		serviceType := c.GetServiceType()
 		if serviceType != common.AnalyzerService && serviceType != common.AgentService {
-			c.SendMessage(msg)
+			if subscriber, found := t.subscribers[c.GetHost()]; found {
+				g, err := t.getGraph(subscriber.gremlinFilter, subscriber.ts)
+				if err != nil {
+					logging.GetLogger().Error(err)
+					continue
+				}
+
+				addedNodes, removedNodes, addedEdges, removedEdges := subscriber.graph.Diff(g)
+
+				for _, n := range addedNodes {
+					c.SendMessage(shttp.NewWSJSONMessage(graph.Namespace, graph.NodeAddedMsgType, n))
+				}
+
+				for _, n := range removedNodes {
+					c.SendMessage(shttp.NewWSJSONMessage(graph.Namespace, graph.NodeDeletedMsgType, n))
+				}
+
+				for _, e := range addedEdges {
+					c.SendMessage(shttp.NewWSJSONMessage(graph.Namespace, graph.EdgeAddedMsgType, e))
+				}
+
+				for _, e := range removedEdges {
+					c.SendMessage(shttp.NewWSJSONMessage(graph.Namespace, graph.EdgeDeletedMsgType, e))
+				}
+
+				subscriber.graph = g
+			} else {
+				c.SendMessage(msg)
+			}
 		}
 	}
 }
@@ -421,12 +507,14 @@ func NewTopologyServer(pool shttp.WSJSONSpeakerPool, auth *shttp.AuthenticationO
 	}
 
 	t := &TopologyServer{
-		Graph:      g,
-		pool:       pool,
-		cached:     cached,
-		authors:    make(map[string]bool),
-		nodeSchema: gojsonschema.NewBytesLoader(nodeSchema),
-		edgeSchema: gojsonschema.NewBytesLoader(edgeSchema),
+		Graph:         g,
+		pool:          pool,
+		cached:        cached,
+		authors:       make(map[string]bool),
+		nodeSchema:    gojsonschema.NewBytesLoader(nodeSchema),
+		edgeSchema:    gojsonschema.NewBytesLoader(edgeSchema),
+		subscribers:   make(map[string]*topologySubscriber),
+		gremlinParser: traversal.NewGremlinTraversalParser(g),
 	}
 	t.replicateMsg.Store(true)
 
