@@ -87,7 +87,7 @@ func UnmarshalWSMessage(msg *shttp.WSJSONMessage) (string, interface{}, error) {
 			syncRequest.TimeSlice = common.NewTimeSlice(i, i)
 		}
 
-		if s, ok := m["GremlinFilter"]; ok {
+		if s, ok := m["topologyFilter"]; ok {
 			if gremlinFilter, _ := s.(string); gremlinFilter != "" {
 				syncRequest.GremlinFilter = gremlinFilter
 			}

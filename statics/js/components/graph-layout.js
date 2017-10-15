@@ -72,6 +72,12 @@ var TopologyGraphLayout = function(vm, selector) {
     .then(function() {
       self.bandwidth.intervalID = setInterval(self.updateBandwidth.bind(self), self.bandwidth.updatePeriod);
     });
+
+   this.filter = {
+     topologyFilter: '',
+   };
+
+  this.setFilterFromConfig();
 };
 
 TopologyGraphLayout.prototype = {
@@ -144,6 +150,7 @@ TopologyGraphLayout.prototype = {
     setTimeout(function() {
       self.queue.start(100);
     }, 1000);
+    self.update();
   },
 
   linkDistance: function(e) {
@@ -864,15 +871,13 @@ TopologyGraphLayout.prototype = {
 
       if (members.indexOf(e.source) < 0 || members.indexOf(e.target) < 0) {
         source = e.source; target = e.target;
-        if (source.group === group) {
+        if (source.group === group && target.group != null ) {
           this.delCollapseLinks(target.group, group.owner);
-
           if (target.group.collapsed) {
             this.addCollapseLink(group, source, target.group.owner, e.metadata);
           }
         } else if (source.group) {
           this.delCollapseLinks(source.group, group.owner);
-
           if (source.group.collapsed) {
             this.addCollapseLink(group, source.group.owner, target, e.metadata);
           }
@@ -953,10 +958,12 @@ TopologyGraphLayout.prototype = {
 
   collapseByNode: function(d) {
     if (d.isGroupOwner()) {
-      if (!d.group.collapsed) {
-        this.collapseGroup(d.group);
-      } else {
-        this.uncollapseGroup(d.group);
+      if(d.group){
+        if (!d.group.collapsed) {
+          this.collapseGroup(d.group);
+        } else {
+          this.uncollapseGroup(d.group);
+        }
       }
     }
 
@@ -1009,6 +1016,25 @@ TopologyGraphLayout.prototype = {
         this.collapseByLevel((level-1), collapse, Object.values(groups[i].children));
       }
     }
+  },
+
+  setFilterFromConfig: function() {
+     var vm = this.vm, fl = this.filter;
+
+     return $.when(
+         vm.$getConfigValue('analyzer.topology_filter'))
+       .then(function(topology_filter) {
+          try {
+             var jsonTopologyFilter = JSON.parse(topology_filter)
+             fl.topologyFilter = jsonTopologyFilter;
+
+             var options = $("#topology-filter-list");
+             $.each(fl.topologyFilter, function(key,value) {
+             options.append($("<option />").text(key).val(value));
+             });
+             }
+             catch(err) {}
+       })
   },
 
   loadBandwidthConfig: function() {

@@ -9,10 +9,25 @@ var TopologyComponent = {
   template: '\
     <div class="topology">\
       <div class="col-sm-7 fill content">\
-        <div class="topology-d3"></div>\
-        <slider v-if="history" class="slider" :min="timeRange[0]" :max="timeRange[1]" \
-                v-model="time" :info="topologyTimeHuman"></slider>\
-        <div class="topology-controls">\
+      <div class="topology-d3"></div>\
+	        <div class="slider">\
+	          <slider v-if="history" :min="timeRange[0]" :max="timeRange[1]" \
+	                v-model="time" :info="topologyTimeHuman"></slider>\
+	          <div class="form-group input-sm" style="width: 450px">\
+	              <label for="topology-filter">Filter</label>\
+	              <input list="topology-filter-list" placeholder="e.g. Name : TOR" \
+	              @click="topologyFilterClear" @mouseleave="topologyFilterMouseLeave" \
+	              id="topology-filter" type="text" style="color: black;width: 350px" \
+	              v-model="topologyFilter" @keyup.enter="topologyFilterQuery"></input>\
+	              <datalist id="topology-filter-list">\
+	              </datalist>\
+	              <button type="button" class="btn btn-primary btn-sm pull-right" \
+	                      @click="topologyFilterQuery"> \
+	                <span class="glyphicon glyphicon-search" aria-hidden="true"></span>\
+	              </button>\
+	          </div>\
+	        </div> \
+         <div class="topology-controls">\
           <button id="zoom-in" type="button" class="btn btn-primary"\
                   title="Zoom In" @click="zoomIn">\
             <span class="glyphicon glyphicon-zoom-in" aria-hidden="true"></span>\
@@ -46,7 +61,7 @@ var TopologyComponent = {
           <button v-if="currentNode != null" id="expand-all" type="button" class="btn btn-primary" \
                   title="Expand/Collapse Current Node Tree" @click="toggleExpandAll(currentNode)">\
             <span class="expand-icon-stack">\
-              <span class="glyphicon icon-main" \
+              <span v-if="currentNode.group != null" class="glyphicon icon-main" \
                  :class="{\'glyphicon-resize-full\': currentNode.group.collapsed, \'glyphicon-resize-small\': !currentNode.group.collapsed}" aria-hidden="true"></span>\
             </span>\
           </button>\
@@ -71,11 +86,11 @@ var TopologyComponent = {
               Interface state at {{timeHuman}}\
             </span>\
             <h1>metadatas<span class="pull-right">(id: {{currentNode.id}})\
-              <i class="node-action fa"\
+              <i v-if="currentNode.group != null" class="node-action fa"\
 	              title="Expand/Collapse Node"\
 		            :class="{\'fa-expand\': currentNode.group.collapsed, \'fa-compress\': !currentNode.group.collapsed}"\
 		            @click="toggleExpandAll(currentNode)"></i></span>\
-	          </h1>\
+	        </h1>\
             <div id="metadata-panel" class="sub-left-panel">\
               <object-detail :object="currentNodeMetadata"></object-detail>\
             </div>\
@@ -105,6 +120,8 @@ var TopologyComponent = {
     return {
       time: 0,
       timeRange: [-120, 0],
+      collapsed: false,
+      topologyFilter: "",
     };
   },
 
@@ -157,6 +174,11 @@ var TopologyComponent = {
   },
 
   watch: {
+
+    topologyFilter: function() {
+       var self = this;
+       self.topologyFilterQuery();
+    },
 
     time: function() {
       var self = this;
@@ -256,6 +278,7 @@ var TopologyComponent = {
     },
 
     onNodeSelected: function(d) {
+
       this.$store.commit('selected', d);
     },
 
@@ -269,6 +292,28 @@ var TopologyComponent = {
 
     zoomFit: function() {
       this.layout.zoomFit();
+    },
+
+    topologyFilterClear: function () {
+         $("#topology-filter").attr('placeholder',$("#topology-filter").val());
+         $("#topology-filter").val('');
+     },
+
+    topologyFilterMouseLeave: function () {
+       if ($("#topology-filter").val() == '') {
+         $("#topology-filter").val($("#topology-filter").attr('placeholder'));
+       }
+    },
+
+    endsWith: function (str, suffix) {
+       return str.indexOf(suffix, str.length - suffix.length) !== -1;
+    },
+
+    topologyFilterQuery: function() {
+        if ($("#topology-filter").val() == '' || this.endsWith($("#topology-filter").val(), "SubGraph()")) {
+            this.$store.commit('topologyFilter', this.topologyFilter);
+            this.syncTopo();
+        }
     },
 
     collapse: function() {
@@ -482,7 +527,7 @@ Graph.prototype = {
 
     var members = Object.values(group.members);
     for (var i = members.length - 1; i >= 0; i--) {
-      members[i].group = null;
+      delete members[i];
     }
     group.members = [];
 
@@ -522,7 +567,6 @@ Graph.prototype = {
       var group = this.groups[source.id];
       if (!group) {
         var type = edge.metadata.RelationType === "ownership" ? "ownership" : "interface";
-        console.log(type);
 
 
         group = this.addGroup(source, type);
@@ -658,6 +702,7 @@ Graph.prototype = {
       store.commit('time', 0);
     }
 
+    obj.topologyFilter=store.state.topologyFilter;
     var msg = {"Namespace": "Graph", "Type": "SyncRequest", "Obj": obj};
     this.websocket.send(msg);
   },

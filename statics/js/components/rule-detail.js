@@ -497,7 +497,8 @@ Vue.component('rule-detail', {
       }
     };
     this.handler = {
-      onPostInit: function(v){},
+      onPreInit: function(){},
+      onPostInit: function(){},
       onNodeAdded: function(v){},
       onNodeDeleted: function(v){},
       onGroupAdded: function(v){},

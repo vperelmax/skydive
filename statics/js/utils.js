@@ -40,13 +40,13 @@ Queue.prototype = {
     this.intervalID = setInterval(function() {
 			var i, call, length = self.calls.length;
 			for (i = 0; i != length; i++) {
-				self.calls[i].shift().apply(null, self.calls[i]);
+				try{ self.calls[i].shift().apply(null, self.calls[i]); } catch(err){}
 			}
 			self.calls = [];
 
       if (self.await) {
         var fnc = self._await.shift();
-        fnc.apply(null, self._await);
+        try{ fnc.apply(null, self._await); } catch(err){}
         self._await.unshift(fnc);
       }
     }, interval);
