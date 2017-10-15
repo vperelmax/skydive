@@ -72,6 +72,12 @@ var TopologyGraphLayout = function(vm, selector) {
     .then(function() {
       self.bandwidth.intervalID = setInterval(self.updateBandwidth.bind(self), self.bandwidth.updatePeriod);
     });
+
+   this.filter = {
+     topologyFilter: '',
+   };
+
+  this.setFilterFromConfig();
 };
 
 TopologyGraphLayout.prototype = {
@@ -144,6 +150,7 @@ TopologyGraphLayout.prototype = {
     setTimeout(function() {
       self.queue.start(100);
     }, 1000);
+    self.update();
   },
 
   linkDistance: function(e) {
@@ -1009,6 +1016,25 @@ TopologyGraphLayout.prototype = {
         this.collapseByLevel((level-1), collapse, Object.values(groups[i].children));
       }
     }
+  },
+
+  setFilterFromConfig: function() {
+     var vm = this.vm, fl = this.filter;
+
+     return $.when(
+         vm.$getConfigValue('analyzer.topology_filter'))
+       .then(function(topology_filter) {
+          try {
+             var jsonTopologyFilter = JSON.parse(topology_filter)
+             fl.topologyFilter = jsonTopologyFilter;
+
+             var options = $("#topology-filter-list");
+             $.each(fl.topologyFilter, function(key,value) {
+             options.append($("<option />").text(key).val(value));
+             });
+             }
+             catch(err) {}
+       })
   },
 
   loadBandwidthConfig: function() {

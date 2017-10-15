@@ -247,41 +247,57 @@ func (t *TopologyServer) OnWSJSONMessage(c shttp.WSSpeaker, msg *shttp.WSJSONMes
 		context, status := obj.(graph.SyncRequestMsg), http.StatusOK
 		g, err := t.Graph.WithContext(context.GraphContext)
 		var result interface{} = g
+		hasValidFilter := false
 		if err != nil {
 			logging.GetLogger().Errorf("analyzer is unable to get a graph with context %+v: %s", context, err.Error())
 			result, status = nil, http.StatusBadRequest
+			reply := msg.Reply(result, graph.SyncReplyMsgType, status)
+			c.SendMessage(reply)
+			t.Graph.RUnlock()
+			return
 		}
 
 		if context.GremlinFilter != "" {
 			ts, err := t.gremlinParser.Parse(strings.NewReader(context.GremlinFilter), false)
 			if err != nil {
 				logging.GetLogger().Infof("Invalid Gremlin filter '%s' for client %s", context.GremlinFilter, c.GetHost())
-				return
-			}
-			logging.GetLogger().Infof("Client %s subscribed with filter %s", c.GetHost(), context.GremlinFilter)
 
-			g, err := t.getGraph(context.GremlinFilter, ts)
-			if err != nil {
-				logging.GetLogger().Error(err)
-				return
+			} else {
+				logging.GetLogger().Infof("Client %s subscribed with filter %s", c.GetHost(), context.GremlinFilter)
+				hasValidFilter = true
 			}
+			if hasValidFilter {
+				gr, err := t.getGraph(context.GremlinFilter, ts)
+				if err != nil {
+					logging.GetLogger().Error(err)
+					//reply := msg.Reply(result, graph.SyncReplyMsgType, status)
+					//c.SendMessage(reply)
+					//t.Graph.RUnlock()
+					//return
+					hasValidFilter = false
+				} else {
+					t.subscribers[c.GetHost()] = &topologySubscriber{graph: gr, ts: ts, gremlinFilter: context.GremlinFilter}
+				}
+			}
+		}
 
-			t.subscribers[c.GetHost()] = &topologySubscriber{graph: g, ts: ts, gremlinFilter: context.GremlinFilter}
+		if !hasValidFilter {
+			delete(t.subscribers, c.GetHost());
 		}
 
 		if subscriber, found := t.subscribers[c.GetHost()]; found {
 			gts, err := subscriber.ts.Exec()
 			if err != nil {
 				logging.GetLogger().Errorf("Graph: unable to get a graph with filter %s: %s", subscriber.gremlinFilter, err.Error())
-				result, status = nil, http.StatusBadRequest
+				//result, status = nil, http.StatusBadRequest
+			} else {
+				result = gts.Values()[0]
 			}
-			result = gts.Values()[0]
 		}
 
 		reply := msg.Reply(result, graph.SyncReplyMsgType, status)
 		c.SendMessage(reply)
 		t.Graph.RUnlock()
-
 		return
 	}
 

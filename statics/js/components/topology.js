@@ -9,10 +9,25 @@ var TopologyComponent = {
   template: '\
     <div class="topology">\
       <div class="col-sm-7 fill content">\
-        <div class="topology-d3"></div>\
-        <slider v-if="history" class="slider" :min="timeRange[0]" :max="timeRange[1]" \
-                v-model="time" :info="topologyTimeHuman"></slider>\
-        <div class="topology-controls">\
+      <div class="topology-d3"></div>\
+	        <div class="slider">\
+	          <slider v-if="history" :min="timeRange[0]" :max="timeRange[1]" \
+	                v-model="time" :info="topologyTimeHuman"></slider>\
+	          <div class="form-group input-sm" style="width: 450px">\
+	              <label for="topology-filter">Filter</label>\
+	              <input list="topology-filter-list" placeholder="e.g. Name : TOR" \
+	              @click="topologyFilterClear" @mouseleave="topologyFilterMouseLeave" \
+	              id="topology-filter" type="text" style="color: black;width: 350px" \
+	              v-model="topologyFilter" @keyup.enter="topologyFilterQuery"></input>\
+	              <datalist id="topology-filter-list">\
+	              </datalist>\
+	              <button type="button" class="btn btn-primary btn-sm pull-right" \
+	                      @click="topologyFilterQuery"> \
+	                <span class="glyphicon glyphicon-search" aria-hidden="true"></span>\
+	              </button>\
+	          </div>\
+	        </div> \
+         <div class="topology-controls">\
           <button id="zoom-in" type="button" class="btn btn-primary"\
                   title="Zoom In" @click="zoomIn">\
             <span class="glyphicon glyphicon-zoom-in" aria-hidden="true"></span>\
@@ -105,6 +120,8 @@ var TopologyComponent = {
     return {
       time: 0,
       timeRange: [-120, 0],
+      collapsed: false,
+      topologyFilter: "",
     };
   },
 
@@ -157,6 +174,11 @@ var TopologyComponent = {
   },
 
   watch: {
+
+    topologyFilter: function() {
+       var self = this;
+       self.topologyFilterQuery();
+    },
 
     time: function() {
       var self = this;
@@ -269,6 +291,22 @@ var TopologyComponent = {
 
     zoomFit: function() {
       this.layout.zoomFit();
+    },
+
+    topologyFilterClear: function () {
+         $("#topology-filter").attr('placeholder',$("#topology-filter").val());
+         $("#topology-filter").val('');
+     },
+
+    topologyFilterMouseLeave: function () {
+       //if ($("#topology-filter").val() == '') {
+       //  $("#topology-filter").val($("#topology-filter").attr('placeholder'));
+       //}
+    },
+
+    topologyFilterQuery: function() {
+          this.$store.commit('topologyFilter', this.topologyFilter);
+          this.syncTopo();
     },
 
     collapse: function() {
@@ -658,6 +696,7 @@ Graph.prototype = {
       store.commit('time', 0);
     }
 
+    obj.topologyFilter=store.state.topologyFilter;
     var msg = {"Namespace": "Graph", "Type": "SyncRequest", "Obj": obj};
     this.websocket.send(msg);
   },

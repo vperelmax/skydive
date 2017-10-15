@@ -29,6 +29,7 @@ analyzer:
   # Must be different than the agent
   # X509_cert: /etc/ssl/certs/analyzer.domain.com.crt
   # X509_key:  /etc/ssl/certs/analyzer.domain.com.key
+  # topology_filter: "{\"TOR1\":\"Name : TOR1\",\"AGGR1\":\"Name : AGGR1\",\"ALL\":\".*\"}"
 
   # Flow storage engine
   # storage:
